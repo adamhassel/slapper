@@ -60,8 +60,8 @@ For hitting many different URLs without having to put them all in a file,
 slapper supports a randomizing and a range syntax in the url part:
 
 * [\<start\>;\<end\>], for example `https://www.example.com/[100;900]/foo` will have slapper visit `example.com/100/foo` through `example.com/900/foo`
-* [r\<length\>;\<alphabet\>], will generate random numbers of `length` using characters in `alphabet`. `alphabet` is ranges of characters, separated by `_`, for example `a-z_0-9`
-* If you use range with random, the range determines the number of unique URLs generated. If you only use randomness, put an integer after the URL to determine the number of unique URLs generated. 
+* [r\<length\>;\<alphabet\>], will generate random character sequences of `length` using characters in `alphabet`. `alphabet` is ranges of characters, separated by `_`, for example `a-z_0-9` (Note: at this point, only an alphabet consisting of a single range is supported, e.g. `[a-z]`)
+* If you use range with random, the range determines the number of unique URLs generated. If you only use randomness, put an integer after the URL to determine the number of unique URLs generated. E.g. `http://example.com/[r10;a-z] 10` will generate 10 urls with random strings. 
 
 
 ## Acknowledgement
