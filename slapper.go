@@ -12,9 +12,12 @@ import (
 	"io/ioutil"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
 	"net/textproto"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,6 +86,11 @@ func resetStats() {
 }
 
 type counter int64
+
+type charrange struct {
+	min rune
+	max rune
+}
 
 func (c *counter) Add(v int64) int64 { return atomic.AddInt64((*int64)(c), v) }
 func (c *counter) Load() int64       { return atomic.LoadInt64((*int64)(c)) }
@@ -178,15 +186,188 @@ func (trgt *targeter) readTargets(reader io.Reader, base64body bool) error {
 				body = []byte(line)
 			}
 		}
-
-		trgt.requests = append(trgt.requests, request{
-			method: method,
-			url:    url,
-			body:   body,
-		})
+		urls, err := parseUrl(url)
+		if err != nil {
+			return err
+		}
+		requests := make([]request, len(urls))
+		for i, url := range urls {
+			requests[i] = request{
+				method: method,
+				url:    url,
+				body:   body,
+			}
+		}
+		trgt.requests = append(trgt.requests, requests...)
 	}
 
 	return nil
+}
+
+// parseUrl will expand any urls containing random/range syntax
+func parseUrl(url string) ([]string, error) {
+	detect := regexp.MustCompile(`\[(r?[^\]]*)\]`)
+	matches := detect.FindAllStringSubmatch(url, -1)
+	orgurl := url
+	if res := strings.SplitN(url, " ", 2); len(res) == 2 {
+		url = res[0]
+	}
+	if len(matches) == 0 {
+		return []string{url}, nil
+	}
+
+	count, err := getCount(orgurl)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []string
+	for _, match := range matches {
+		if len(match) != 2 {
+			return result, errors.New("unexpected matches")
+		}
+		fullmatch := match[0]
+		submatch := match[1]
+		if string(submatch[0]) == "r" {
+			rargs := strings.Split(match[1][1:], ";")
+			if len(rargs) != 2 {
+				return nil, fmt.Errorf("need exactly three arguments for random url matches, got %d (%s)", len(rargs), rargs)
+			}
+			l, err := strconv.Atoi(rargs[0])
+			if err != nil {
+				return nil, fmt.Errorf("error parsing length: %s", err)
+			}
+			if count == 0 {
+				return nil, errors.New("count was zero or missing")
+			}
+			a := rargs[1]
+			ranges := strings.Split(a, "_")
+			var cr []charrange
+			for _, r := range ranges {
+				minmax := strings.Split(r, "-")
+				if len(minmax) != 2 || len(minmax[0]) > 1 || len(minmax[1]) > 1 {
+					return nil, errors.New("invalid range")
+				}
+				cr = append(cr, charrange{min: []rune(minmax[0])[0], max: []rune(minmax[1])[0]})
+			}
+			randstr := randomString(cr, l, count)
+			if result == nil {
+				result = make([]string, count)
+				for i := range result {
+					result[i] = url
+				}
+			}
+			for i := range result {
+				result[i] = strings.Replace(result[i], fullmatch, randstr[i], -1)
+			}
+		} else { // assume it's just a range
+			fmt.Println(submatch, fullmatch)
+			min, _, err := getMinMax(submatch)
+			if err != nil {
+				return nil, err
+			}
+			if result == nil {
+				result = make([]string, count)
+				for i := range result {
+					result[i] = url
+				}
+			}
+			for i := range result {
+				result[i] = strings.Replace(result[i], fullmatch, strconv.Itoa(i+min), -1)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// getCount will extract the count from a url, either by parsing the range or getting an explicit count. Range trumps a count
+func getCount(url string) (int, error) {
+	var count int
+	rng := regexp.MustCompile(`\[(\d+-\d+)\]`)
+	matches := rng.FindAllStringSubmatch(url, -1)
+	fmt.Println(matches)
+	if len(matches) > 0 {
+		for _, match := range matches {
+			sub := match[1]
+			if sub == "" {
+				continue
+			}
+			min, max, err := getMinMax(sub)
+			if err != nil {
+				return 0, err
+			}
+			if count == 0 {
+				count = (max - min) + 1
+				continue
+			}
+			count *= (max - min) + 1
+		}
+		return count, nil
+	}
+	// If no range in url, get the explicit range from the passed string
+	split := strings.SplitN(url, " ", 2)
+	if len(split) == 0 {
+		return 0, errors.New("url parse error, no count")
+	}
+	if len(split) != 2 {
+		return 0, errors.New("url parse error, invalid syntax")
+	}
+	var err error
+	count, err = strconv.Atoi(split[1])
+	if err != nil {
+		return 0, fmt.Errorf("error parsing count: %s", err)
+	}
+	return count, nil
+}
+
+// randomString generates count random strings from the given range specifications
+func randomString(charranges []charrange, length, count int) []string {
+	var charlist string
+	for _, r := range charranges {
+		charlist += makeCharList(r)
+	}
+	result := make([]string, count)
+	for i := 0; i < count; i++ {
+		b := make([]byte, length)
+		for i := range b {
+			b[i] = charlist[rand.Int63()%int64(len(charlist))]
+		}
+		result[i] = string(b)
+	}
+
+	return result
+}
+
+func getMinMax(stmt string) (int, int, error) {
+	minmax := strings.Split(stmt, "-")
+	if len(minmax) != 2 {
+		return 0, 0, errors.New("range parse error, did not find min or max")
+	}
+	min, err := strconv.Atoi(minmax[0])
+	if err != nil {
+		return 0, 0, errors.New("range parse error, min not an integer")
+	}
+	max, err := strconv.Atoi(minmax[1])
+	if err != nil {
+		return 0, 0, errors.New("range parse error, max not an integer")
+	}
+	if min > max {
+		return 0, 0, errors.New("invalid range")
+	}
+	return min, max, nil
+}
+
+// makeCharList returns a string with all chars expressed from the range in
+func makeCharList(in charrange) string {
+	var out string
+	if in.min > in.max {
+		return ""
+	}
+	for c := in.min; c <= in.max; c++ {
+		out += string(c)
+	}
+	return out
 }
 
 func (trgt *targeter) nextRequest() (*http.Request, error) {
@@ -588,4 +769,8 @@ func main() {
 	// bye
 	close(quit)
 	wg.Wait()
+}
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
 }

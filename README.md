@@ -53,6 +53,18 @@ line are:
 A missing body line is taken to mean an empty request body. Point (2) is there
 for backwards-compatibility.
 
+### Randomizing traffic
+(WIP)
+
+For hitting many different URLs without having to put them all in a file,
+slapper supports a randomizing and a range syntax in the url part:
+
+* [\<start\>;\<end\>], for example `https://www.example.com/[100;900]/foo` will have slapper visit `example.com/100/foo` through `example.com/900/foo`
+* [r\<length\>;\<alphabet\>], will generate random numbers of `length` using characters in `alphabet`. `alphabet` is ranges of characters, separated by `_`, for example `a-z_0-9`
+* If you use range with random, the range determines the number of unique URLs generated. If you only use randomness, put an integer after the URL to determine the number of unique URLs generated. 
+
+
 ## Acknowledgement
 * Idea and initial implementation is by @sparky
 * This module was originally developed for Booking.com.
+* Forked from  github.com/ikruglov/slapper
